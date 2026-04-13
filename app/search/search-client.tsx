@@ -30,7 +30,7 @@ interface Listing {
   list_date: string | null;
   modification_timestamp: string | null;
   list_office_key: string | null;
-  listing_media: { storage_path: string | null; order_index: number; is_primary: boolean }[];
+  listing_media: { media_key: string; media_url_original: string | null; storage_path: string | null; order_index: number; is_primary: boolean }[];
 }
 
 interface Pagination {
@@ -59,17 +59,16 @@ const cities = [
 ];
 
 const propertyTypes = [
-  "All types",
-  "Residential",
-  "Condominium",
-  "Townhouse",
-  "Land",
-  "Multi-Family",
+  { label: "All types", value: "" },
+  { label: "Residential", value: "Residential" },
+  { label: "Land", value: "Land" },
+  { label: "Commercial", value: "Commercial Sale" },
+  { label: "Rental", value: "Residential Lease" },
 ];
 
 export function SearchPageClient() {
   const [listings, setListings] = useState<Listing[]>([]);
-  const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 24, total: 0, totalPages: 0 });
+  const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 12, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -78,14 +77,14 @@ export function SearchPageClient() {
   const [maxPrice, setMaxPrice] = useState("");
   const [beds, setBeds] = useState("");
   const [baths, setBaths] = useState("");
-  const [propertyType, setPropertyType] = useState("All types");
+  const [propertyType, setPropertyType] = useState("");
   const [sort, setSort] = useState("list_date");
 
   const fetchListings = useCallback(async (page = 1) => {
     setLoading(true);
     const params = new URLSearchParams();
     params.set("page", String(page));
-    params.set("limit", "24");
+    params.set("limit", "12");
     params.set("status", "Active,Pending");
     params.set("sort", sort);
     params.set("order", "desc");
@@ -95,7 +94,10 @@ export function SearchPageClient() {
     if (maxPrice) params.set("maxPrice", maxPrice);
     if (beds) params.set("beds", beds);
     if (baths) params.set("baths", baths);
-    if (propertyType !== "All types") params.set("propertyType", propertyType);
+    if (propertyType) {
+      params.set("propertyType", propertyType);
+      if (propertyType === "Residential Lease") params.set("includeLease", "true");
+    }
 
     try {
       const res = await fetch(`/api/listings?${params}`);
@@ -119,11 +121,11 @@ export function SearchPageClient() {
     setMaxPrice("");
     setBeds("");
     setBaths("");
-    setPropertyType("All types");
+    setPropertyType("");
     setSort("list_date");
   };
 
-  const hasActiveFilters = city !== "All cities" || minPrice || maxPrice || beds || baths || propertyType !== "All types";
+  const hasActiveFilters = city !== "All cities" || minPrice || maxPrice || beds || baths || !!propertyType;
 
   return (
     <div className="min-h-screen bg-background">
@@ -222,7 +224,7 @@ export function SearchPageClient() {
                 className="rounded-lg border border-border bg-background px-3 py-2 text-sm"
               >
                 {propertyTypes.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
               {hasActiveFilters && (

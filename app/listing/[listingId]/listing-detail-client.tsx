@@ -24,9 +24,10 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
   const media = (listing.listing_media || [])
     .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const getImageUrl = (path: string | null) =>
-    path ? `${supabaseUrl}/storage/v1/object/public/${path}` : null;
+  const getImageUrl = (m: any) => {
+    if (!m) return null;
+    return m.media_url_original || null;
+  };
 
   const formatPrice = (price: number | null) => {
     if (!price) return "Price not available";
@@ -81,7 +82,7 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
                 onClick={() => { setLightboxOpen(true); setLightboxIndex(0); }}
               >
                 <img
-                  src={getImageUrl(media[0]?.storage_path) || ""}
+                  src={getImageUrl(media[0]) || ""}
                   alt={address}
                   className="h-full w-full object-cover hover:scale-105 transition-transform duration-500"
                 />
@@ -94,7 +95,7 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
                   onClick={() => { setLightboxOpen(true); setLightboxIndex(i + 1); }}
                 >
                   <img
-                    src={getImageUrl(m.storage_path) || ""}
+                    src={getImageUrl(m) || ""}
                     alt={`${address} photo ${i + 2}`}
                     className="h-full w-full object-cover hover:scale-105 transition-transform duration-500"
                     loading="lazy"
@@ -128,7 +129,7 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
             <ChevronLeft className="h-8 w-8" />
           </button>
           <img
-            src={getImageUrl(media[lightboxIndex]?.storage_path) || ""}
+            src={getImageUrl(media[lightboxIndex]) || ""}
             alt={`${address} photo ${lightboxIndex + 1}`}
             className="max-h-[85vh] max-w-[90vw] object-contain"
           />
@@ -159,9 +160,9 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
                 }`}>
                   {listing.standard_status}
                 </span>
-                {listing.days_on_market != null && (
+                {listing.list_date && (
                   <span className="text-sm text-muted-foreground">
-                    {listing.days_on_market} days on market
+                    {Math.max(0, Math.floor((Date.now() - new Date(listing.list_date).getTime()) / 86400000))} days on market
                   </span>
                 )}
               </div>

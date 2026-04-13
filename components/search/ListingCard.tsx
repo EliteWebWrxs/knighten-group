@@ -17,14 +17,15 @@ interface ListingCardProps {
     living_area: number | null;
     property_type: string | null;
     days_on_market: number | null;
-    listing_media: { storage_path: string | null; is_primary: boolean }[];
+    list_date: string | null;
+    listing_media: { media_key: string; media_url_original: string | null; storage_path: string | null; is_primary: boolean }[];
   };
 }
 
 export function ListingCard({ listing }: ListingCardProps) {
   const address = getDisplayAddress(listing as any);
-  const primaryImage = listing.listing_media?.find((m) => m.is_primary)?.storage_path
-    || listing.listing_media?.[0]?.storage_path;
+  const primary = listing.listing_media?.find((m) => m.is_primary) || listing.listing_media?.[0];
+  const primaryImage = primary?.media_url_original || null;
 
   const formatPrice = (price: number | null) => {
     if (!price) return "Price not available";
@@ -50,7 +51,7 @@ export function ListingCard({ listing }: ListingCardProps) {
       <div className="relative aspect-[4/3] bg-muted overflow-hidden">
         {primaryImage ? (
           <img
-            src={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${primaryImage}`}
+            src={primaryImage}
             alt={address}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
             loading="lazy"
@@ -66,10 +67,10 @@ export function ListingCard({ listing }: ListingCardProps) {
             statusColors[listing.standard_status] || "bg-gray-500 text-white"
           }`}
         >
-          {listing.standard_status}
+          {listing.property_type === "Residential Lease" ? "For Rent" : listing.standard_status}
         </span>
         {/* Days on market */}
-        {listing.days_on_market !== null && listing.days_on_market <= 7 && (
+        {listing.list_date && Math.floor((Date.now() - new Date(listing.list_date).getTime()) / 86400000) <= 7 && (
           <span className="absolute top-3 right-3 px-2 py-0.5 rounded text-xs font-medium bg-gold text-white">
             New
           </span>
@@ -79,7 +80,7 @@ export function ListingCard({ listing }: ListingCardProps) {
       {/* Details */}
       <div className="p-4">
         <p className="text-lg font-semibold text-foreground">
-          {formatPrice(listing.list_price)}
+          {formatPrice(listing.list_price)}{listing.property_type === "Residential Lease" ? "/mo" : ""}
         </p>
         <div className="flex items-center gap-3 mt-1.5 text-sm text-muted-foreground">
           {listing.bedrooms_total != null && (

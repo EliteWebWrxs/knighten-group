@@ -55,7 +55,9 @@ export async function GET(req: NextRequest) {
       list_date,
       modification_timestamp,
       list_office_key,
-      listing_media!inner (
+      listing_media (
+        media_key,
+        media_url_original,
         storage_path,
         order_index,
         is_primary
@@ -68,6 +70,12 @@ export async function GET(req: NextRequest) {
     .not('idx_participation_yn', 'is', false)
     .not('delayed_distribution_yn', 'is', true)
     .not('office_exclusive_yn', 'is', true);
+
+  // Exclude leases by default unless explicitly requested
+  const excludeLease = searchParams.get('includeLease') !== 'true';
+  if (excludeLease && !propertyType) {
+    query = query.neq('property_type', 'Residential Lease');
+  }
 
   if (city) query = query.eq('city', city);
   if (minPrice) query = query.gte('list_price', parseFloat(minPrice));

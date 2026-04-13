@@ -68,6 +68,7 @@ export default async function ListingDetailPage({ params }: Props) {
       *,
       listing_media (
         media_key,
+        media_url_original,
         storage_path,
         order_index,
         media_category,

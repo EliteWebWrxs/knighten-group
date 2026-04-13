@@ -53,6 +53,16 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const requestedResource = url.searchParams.get('resource');
 
+  // Allow triggering media downloads directly
+  if (requestedResource === 'Media') {
+    try {
+      const mediaProcessed = await processUndownloadedMedia(100);
+      return Response.json({ ok: true, results: { resource: 'Media', mediaProcessed } });
+    } catch (e) {
+      return Response.json({ ok: false, results: { resource: 'Media', error: e instanceof Error ? e.message : 'unknown error' } });
+    }
+  }
+
   // Determine which resource to sync
   let resource: string;
   if (requestedResource && RESOURCE_MAP[requestedResource]) {
@@ -71,7 +81,7 @@ export async function GET(req: Request) {
     // If this resource has no more pages, also process some media
     if (!syncResult.hasMore) {
       try {
-        const mediaProcessed = await processUndownloadedMedia(30);
+        const mediaProcessed = await processUndownloadedMedia(50);
         results.mediaProcessed = mediaProcessed;
       } catch (e) {
         results.mediaError = e instanceof Error ? e.message : 'unknown error';
