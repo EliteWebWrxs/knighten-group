@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { mlsGridFetch, delay } from './client';
 import { suppressFields } from './filters';
+import { downloadMediaBatch } from './media';
 
 function getServiceClient() {
   return createClient(
@@ -160,6 +161,7 @@ export async function syncProperty() {
     : new Date(0);
   let kept = 0;
   let fetched = 0;
+  let mediaDownloaded = 0;
 
   try {
     const supabase = getServiceClient();
@@ -180,6 +182,7 @@ export async function syncProperty() {
       const listingRows: ReturnType<typeof mapPropertyToRow>[] = [];
       const allMediaRows: Record<string, unknown>[][] = [];
       const toSoftDelete: string[] = [];
+      const freshMediaForDownload: { mediaKey: string; mediaUrl: string; listingKey: string; isPrimary: boolean }[] = [];
 
       for (const r of records) {
         if (r.MlgCanView === false) {
@@ -202,6 +205,17 @@ export async function syncProperty() {
                 modification_timestamp: m.ModificationTimestamp as string,
               }))
             );
+            // Collect fresh URLs for immediate download (primary images only)
+            media.forEach((m, i) => {
+              if (m.MediaURL) {
+                freshMediaForDownload.push({
+                  mediaKey: m.MediaKey as string,
+                  mediaUrl: m.MediaURL as string,
+                  listingKey: r.ListingKey as string,
+                  isPrimary: i === 0,
+                });
+              }
+            });
           }
           kept++;
         }
@@ -229,6 +243,16 @@ export async function syncProperty() {
           .in('listing_key', toSoftDelete);
       }
 
+      // Download primary images while URLs are still fresh (they expire quickly)
+      if (freshMediaForDownload.length > 0) {
+        try {
+          const downloaded = await downloadMediaBatch(freshMediaForDownload);
+          mediaDownloaded += downloaded;
+        } catch (e) {
+          console.error('[Sync] Media download batch error:', e);
+        }
+      }
+
       pagesWalked++;
       url = page['@odata.nextLink'] ?? null;
 
@@ -246,7 +270,7 @@ export async function syncProperty() {
     });
 
     // Return whether there are more pages to process
-    return { fetched, kept, pagesWalked, hasMore: !!url };
+    return { fetched, kept, pagesWalked, hasMore: !!url, mediaDownloaded };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     const supabase = getServiceClient();

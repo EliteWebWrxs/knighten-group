@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { syncProperty, syncMember, syncOffice, syncOpenHouse } from '@/lib/mls/sync';
-import { processUndownloadedMedia } from '@/lib/mls/media';
+import { backfillMedia } from '@/lib/mls/media';
 
 const RESOURCE_MAP: Record<string, () => Promise<{ fetched: number; pagesWalked: number; hasMore: boolean; kept?: number }>> = {
   Property: syncProperty,
@@ -53,10 +53,10 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const requestedResource = url.searchParams.get('resource');
 
-  // Allow triggering media downloads directly
+  // Allow triggering media backfill directly — re-fetches fresh URLs from MLS Grid
   if (requestedResource === 'Media') {
     try {
-      const mediaResult = await processUndownloadedMedia(100);
+      const mediaResult = await backfillMedia(20);
       return Response.json({ ok: true, results: { resource: 'Media', ...mediaResult } });
     } catch (e) {
       return Response.json({ ok: false, results: { resource: 'Media', error: e instanceof Error ? e.message : 'unknown error' } });
@@ -78,10 +78,10 @@ export async function GET(req: Request) {
     const syncResult = await syncFn();
     results.sync = syncResult;
 
-    // If this resource has no more pages, also process some media
+    // If this resource has no more pages, also backfill some media
     if (!syncResult.hasMore) {
       try {
-        const mediaResult = await processUndownloadedMedia(50);
+        const mediaResult = await backfillMedia(10);
         results.media = mediaResult;
       } catch (e) {
         results.mediaError = e instanceof Error ? e.message : 'unknown error';

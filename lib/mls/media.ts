@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { mlsGridFetch, delay } from './client';
 
 function getServiceClient() {
   return createClient(
@@ -8,9 +9,9 @@ function getServiceClient() {
 }
 
 /**
- * Downloads a photo from MLS Grid and uploads to Supabase Storage.
- * Returns the storage path. Per MLS Grid Best Practices paragraph 10,
- * we must not hotlink media URLs.
+ * Downloads a photo from a fresh MLS Grid MediaURL and uploads to Supabase Storage.
+ * Returns the storage path. MLS Grid MediaURLs are signed and expire quickly,
+ * so this must be called with a freshly-obtained URL.
  */
 export async function downloadAndStoreMedia(
   mediaKey: string,
@@ -18,14 +19,11 @@ export async function downloadAndStoreMedia(
   listingKey: string
 ): Promise<string | null> {
   try {
-    // MLS Grid media URLs are pre-signed with token & expiry in the URL.
-    // Do NOT send Authorization header — it conflicts with the signed URL
-    // and causes a 400 error.
     const res = await fetch(mediaUrl);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      console.error(`Media download failed ${mediaKey}: HTTP ${res.status} - ${body.slice(0, 200)} - URL: ${mediaUrl.slice(0, 100)}`);
+      console.error(`Media download failed ${mediaKey}: HTTP ${res.status} - ${body.slice(0, 200)}`);
       return null;
     }
 
@@ -62,44 +60,81 @@ export async function downloadAndStoreMedia(
 }
 
 /**
- * Process all media for listings that have original URLs but no storage path.
- * Run this after sync to backfill photos.
+ * Download media for a batch of fresh Media records from the API response.
+ * Called inline during syncProperty when we have fresh (non-expired) URLs.
+ * Only downloads the primary (first) image per listing to stay within time limits.
  */
-export async function processUndownloadedMedia(batchSize = 50) {
+export async function downloadMediaBatch(
+  mediaRecords: { mediaKey: string; mediaUrl: string; listingKey: string; isPrimary: boolean }[]
+): Promise<number> {
+  // Only download primary images during sync to stay within time budget
+  const primaries = mediaRecords.filter((m) => m.isPrimary);
+  let downloaded = 0;
+
+  for (const m of primaries) {
+    const path = await downloadAndStoreMedia(m.mediaKey, m.mediaUrl, m.listingKey);
+    if (path) downloaded++;
+    // Small delay between downloads
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  return downloaded;
+}
+
+/**
+ * Backfill media for listings that have no downloaded images.
+ * Re-fetches fresh URLs from MLS Grid API since stored URLs expire.
+ */
+export async function backfillMedia(batchSize = 20) {
   const supabase = getServiceClient();
 
-  // Find media that has a URL but hasn't been downloaded yet
+  // Find listing_keys that have media but nothing downloaded yet
   const { data: media, error } = await supabase
     .from('listing_media')
-    .select('media_key, media_url_original, listing_key')
+    .select('listing_key')
     .is('storage_path', null)
     .not('media_url_original', 'is', null)
-    .neq('media_url_original', '')
-    .limit(batchSize);
+    .limit(batchSize * 5);
 
-  if (error) {
-    console.error('[Media] Query error:', error.message);
-    throw new Error(`Media query failed: ${error.message}`);
-  }
+  if (error || !media?.length) return { processed: 0, found: 0 };
 
-  if (!media?.length) return { processed: 0, found: 0 };
+  // Deduplicate to unique listing keys
+  const uniqueKeys = [...new Set(media.map((m) => m.listing_key))].slice(0, batchSize);
+  return await fetchAndDownloadForListings(uniqueKeys);
+}
 
+/**
+ * For a set of listing keys, fetch fresh media URLs from MLS Grid
+ * and download the primary image for each.
+ */
+async function fetchAndDownloadForListings(listingKeys: string[]) {
   let processed = 0;
-  let firstError: string | null = null;
-  for (const m of media) {
-    const path = await downloadAndStoreMedia(
-      m.media_key,
-      m.media_url_original,
-      m.listing_key
-    );
-    if (path) {
-      processed++;
-    } else if (!firstError) {
-      firstError = `Failed: ${m.media_key}`;
+
+  for (const listingKey of listingKeys) {
+    try {
+      // Fetch fresh media URLs from MLS Grid for this listing
+      const url = `Property('${listingKey}')?$expand=Media`;
+      const data = await mlsGridFetch(url);
+
+      const media = (data.Media ?? []) as Record<string, unknown>[];
+      if (media.length === 0) continue;
+
+      // Download primary image (first one)
+      const primary = media[0];
+      const mediaUrl = primary.MediaURL as string;
+      const mediaKey = primary.MediaKey as string;
+
+      if (!mediaUrl || !mediaKey) continue;
+
+      const path = await downloadAndStoreMedia(mediaKey, mediaUrl, listingKey);
+      if (path) processed++;
+
+      // Respect rate limits
+      await delay(600);
+    } catch (err) {
+      console.error(`Backfill failed for ${listingKey}:`, err);
     }
-    // Respect rate limits even for media downloads
-    await new Promise((r) => setTimeout(r, 300));
   }
 
-  return { processed, found: media.length, firstError };
+  return { processed, found: listingKeys.length };
 }
