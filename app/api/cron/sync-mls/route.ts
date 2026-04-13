@@ -56,8 +56,8 @@ export async function GET(req: Request) {
   // Allow triggering media downloads directly
   if (requestedResource === 'Media') {
     try {
-      const mediaProcessed = await processUndownloadedMedia(100);
-      return Response.json({ ok: true, results: { resource: 'Media', mediaProcessed } });
+      const mediaResult = await processUndownloadedMedia(100);
+      return Response.json({ ok: true, results: { resource: 'Media', ...mediaResult } });
     } catch (e) {
       return Response.json({ ok: false, results: { resource: 'Media', error: e instanceof Error ? e.message : 'unknown error' } });
     }
@@ -81,8 +81,8 @@ export async function GET(req: Request) {
     // If this resource has no more pages, also process some media
     if (!syncResult.hasMore) {
       try {
-        const mediaProcessed = await processUndownloadedMedia(50);
-        results.mediaProcessed = mediaProcessed;
+        const mediaResult = await processUndownloadedMedia(50);
+        results.media = mediaResult;
       } catch (e) {
         results.mediaError = e instanceof Error ? e.message : 'unknown error';
       }

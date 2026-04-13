@@ -66,14 +66,30 @@ export async function downloadAndStoreMedia(
 export async function processUndownloadedMedia(batchSize = 50) {
   const supabase = getServiceClient();
 
-  const { data: media } = await supabase
+  // Diagnostic: count total rows to verify service role access
+  const { count: totalCount, error: countErr } = await supabase
+    .from('listing_media')
+    .select('*', { count: 'exact', head: true });
+
+  if (countErr) {
+    throw new Error(`Media count failed: ${countErr.message}`);
+  }
+
+  // Find media that has a URL but hasn't been downloaded yet
+  const { data: media, error } = await supabase
     .from('listing_media')
     .select('media_key, media_url_original, listing_key')
     .is('storage_path', null)
     .not('media_url_original', 'is', null)
+    .neq('media_url_original', '')
     .limit(batchSize);
 
-  if (!media?.length) return 0;
+  if (error) {
+    console.error('[Media] Query error:', error.message);
+    throw new Error(`Media query failed: ${error.message}`);
+  }
+
+  if (!media?.length) return { processed: 0, found: 0, totalRows: totalCount };
 
   let processed = 0;
   for (const m of media) {
@@ -87,5 +103,5 @@ export async function processUndownloadedMedia(batchSize = 50) {
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  return processed;
+  return { processed, found: media.length, totalRows: totalCount };
 }
