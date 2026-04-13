@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { SearchPageClient } from "./search-client";
 
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Search homes for sale in Tampa Bay",
   description:
