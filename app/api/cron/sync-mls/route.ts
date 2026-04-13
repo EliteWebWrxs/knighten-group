@@ -81,5 +81,8 @@ export async function GET(req: Request) {
     results.error = e instanceof Error ? e.message : 'unknown error';
   }
 
+  results.originatingSystem = process.env.MLS_GRID_ORIGINATING_SYSTEM_NAME || 'mfrmls (default)';
+  results.hasToken = !!process.env.MLS_GRID_TOKEN;
+
   return Response.json({ ok: !results.error, results });
 }
