@@ -1,0 +1,30 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /auth/
+Disallow: /protected/
+
+# Throttle listing detail crawl rate
+User-agent: Googlebot
+Crawl-delay: 2
+
+User-agent: Bingbot
+Crawl-delay: 2
+
+# Block aggressive scrapers (TPDAA paragraph 9)
+User-agent: AhrefsBot
+Disallow: /listing/
+Disallow: /search/
+
+User-agent: SemrushBot
+Disallow: /listing/
+Disallow: /search/
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+Sitemap: https://theknightengroup.com/sitemap.xml
