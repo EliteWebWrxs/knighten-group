@@ -8,46 +8,68 @@ export async function GET() {
 
   const diagnostics: Record<string, unknown> = {};
 
-  // 1. Count total rows
-  const { count: total, error: e1 } = await supabase
+  // Get one media row to test
+  const { data: sample } = await supabase
     .from('listing_media')
-    .select('*', { count: 'exact', head: true });
-  diagnostics.totalRows = total;
-  diagnostics.totalError = e1?.message ?? null;
-
-  // 2. Count rows with storage_path IS NULL
-  const { count: nullStorage, error: e2 } = await supabase
-    .from('listing_media')
-    .select('*', { count: 'exact', head: true })
-    .is('storage_path', null);
-  diagnostics.nullStoragePath = nullStorage;
-  diagnostics.nullStorageError = e2?.message ?? null;
-
-  // 3. Count rows with media_url_original IS NOT NULL
-  const { count: hasUrl, error: e3 } = await supabase
-    .from('listing_media')
-    .select('*', { count: 'exact', head: true })
-    .not('media_url_original', 'is', null);
-  diagnostics.hasUrl = hasUrl;
-  diagnostics.hasUrlError = e3?.message ?? null;
-
-  // 4. Try the combined query
-  const { data: sample, error: e4 } = await supabase
-    .from('listing_media')
-    .select('media_key, media_url_original, listing_key, storage_path')
+    .select('media_key, media_url_original, listing_key')
     .is('storage_path', null)
     .not('media_url_original', 'is', null)
-    .limit(3);
-  diagnostics.combinedQuery = { count: sample?.length ?? 0, error: e4?.message ?? null };
-  diagnostics.sampleRows = sample;
+    .limit(1)
+    .single();
 
-  // 5. Try fetching just any 3 rows, no filters
-  const { data: anyRows, error: e5 } = await supabase
-    .from('listing_media')
-    .select('media_key, media_url_original, storage_path')
-    .limit(3);
-  diagnostics.anyRows = { count: anyRows?.length ?? 0, error: e5?.message ?? null };
-  diagnostics.anySample = anyRows;
+  if (!sample) {
+    return Response.json({ error: 'No media rows found' });
+  }
+
+  diagnostics.mediaKey = sample.media_key;
+  diagnostics.url = sample.media_url_original;
+
+  // Try fetching without auth
+  try {
+    const res1 = await fetch(sample.media_url_original);
+    diagnostics.noAuth = {
+      status: res1.status,
+      statusText: res1.statusText,
+      contentType: res1.headers.get('content-type'),
+      body: res1.ok ? `(${res1.headers.get('content-length')} bytes)` : await res1.text().then(t => t.slice(0, 500)),
+    };
+  } catch (e) {
+    diagnostics.noAuth = { error: String(e) };
+  }
+
+  // Try fetching with bearer token
+  try {
+    const res2 = await fetch(sample.media_url_original, {
+      headers: { Authorization: `Bearer ${process.env.MLS_GRID_TOKEN!}` },
+    });
+    diagnostics.withAuth = {
+      status: res2.status,
+      statusText: res2.statusText,
+      contentType: res2.headers.get('content-type'),
+      body: res2.ok ? `(${res2.headers.get('content-length')} bytes)` : await res2.text().then(t => t.slice(0, 500)),
+    };
+  } catch (e) {
+    diagnostics.withAuth = { error: String(e) };
+  }
+
+  // Try fetching with the URL reformatted — maybe needs ? instead of bare params
+  const fixedUrl = sample.media_url_original.replace(
+    'media.mlsgrid.com/token=',
+    'media.mlsgrid.com/?token='
+  );
+  diagnostics.fixedUrl = fixedUrl;
+
+  try {
+    const res3 = await fetch(fixedUrl);
+    diagnostics.fixedNoAuth = {
+      status: res3.status,
+      statusText: res3.statusText,
+      contentType: res3.headers.get('content-type'),
+      body: res3.ok ? `(${res3.headers.get('content-length')} bytes)` : await res3.text().then(t => t.slice(0, 500)),
+    };
+  } catch (e) {
+    diagnostics.fixedNoAuth = { error: String(e) };
+  }
 
   return Response.json(diagnostics);
 }

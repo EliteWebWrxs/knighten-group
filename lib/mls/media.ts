@@ -24,7 +24,8 @@ export async function downloadAndStoreMedia(
     const res = await fetch(mediaUrl);
 
     if (!res.ok) {
-      console.error(`Media download failed ${mediaKey}: HTTP ${res.status}`);
+      const body = await res.text().catch(() => '');
+      console.error(`Media download failed ${mediaKey}: HTTP ${res.status} - ${body.slice(0, 200)} - URL: ${mediaUrl.slice(0, 100)}`);
       return null;
     }
 
