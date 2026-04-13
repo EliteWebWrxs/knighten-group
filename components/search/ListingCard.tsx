@@ -25,7 +25,11 @@ interface ListingCardProps {
 export function ListingCard({ listing }: ListingCardProps) {
   const address = getDisplayAddress(listing as any);
   const primary = listing.listing_media?.find((m) => m.is_primary) || listing.listing_media?.[0];
-  const primaryImage = primary?.media_url_original || null;
+  const primaryImage = primary
+    ? (primary.storage_path
+        ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/listing-photos/${primary.storage_path}`
+        : primary.media_url_original)
+    : null;
 
   const formatPrice = (price: number | null) => {
     if (!price) return "Price not available";

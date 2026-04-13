@@ -26,6 +26,7 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
 
   const getImageUrl = (m: any) => {
     if (!m) return null;
+    if (m.storage_path) return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/listing-photos/${m.storage_path}`;
     return m.media_url_original || null;
   };
 

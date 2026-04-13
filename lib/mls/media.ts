@@ -29,7 +29,7 @@ export async function downloadAndStoreMedia(
 
     const contentType = res.headers.get('content-type') || 'image/jpeg';
     const ext = contentType.includes('png') ? 'png' : 'jpg';
-    const storagePath = `listing-photos/${listingKey}/${mediaKey}.${ext}`;
+    const storagePath = `${listingKey}/${mediaKey}.${ext}`;
 
     const buffer = Buffer.from(await res.arrayBuffer());
     const supabase = getServiceClient();
