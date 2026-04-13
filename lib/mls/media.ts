@@ -18,6 +18,7 @@ export async function downloadAndStoreMedia(
   listingKey: string
 ): Promise<string | null> {
   try {
+    // MLS Grid media URLs are pre-signed; still include bearer token per API docs
     const res = await fetch(mediaUrl, {
       headers: {
         Authorization: `Bearer ${process.env.MLS_GRID_TOKEN!}`,
@@ -25,7 +26,10 @@ export async function downloadAndStoreMedia(
       },
     });
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Media download failed ${mediaKey}: HTTP ${res.status}`);
+      return null;
+    }
 
     const contentType = res.headers.get('content-type') || 'image/jpeg';
     const ext = contentType.includes('png') ? 'png' : 'jpg';
@@ -66,15 +70,6 @@ export async function downloadAndStoreMedia(
 export async function processUndownloadedMedia(batchSize = 50) {
   const supabase = getServiceClient();
 
-  // Diagnostic: count total rows to verify service role access
-  const { count: totalCount, error: countErr } = await supabase
-    .from('listing_media')
-    .select('*', { count: 'exact', head: true });
-
-  if (countErr) {
-    throw new Error(`Media count failed: ${countErr.message}`);
-  }
-
   // Find media that has a URL but hasn't been downloaded yet
   const { data: media, error } = await supabase
     .from('listing_media')
@@ -89,19 +84,24 @@ export async function processUndownloadedMedia(batchSize = 50) {
     throw new Error(`Media query failed: ${error.message}`);
   }
 
-  if (!media?.length) return { processed: 0, found: 0, totalRows: totalCount };
+  if (!media?.length) return { processed: 0, found: 0 };
 
   let processed = 0;
+  let firstError: string | null = null;
   for (const m of media) {
     const path = await downloadAndStoreMedia(
       m.media_key,
       m.media_url_original,
       m.listing_key
     );
-    if (path) processed++;
+    if (path) {
+      processed++;
+    } else if (!firstError) {
+      firstError = `Failed: ${m.media_key}`;
+    }
     // Respect rate limits even for media downloads
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  return { processed, found: media.length, totalRows: totalCount };
+  return { processed, found: media.length, firstError };
 }
