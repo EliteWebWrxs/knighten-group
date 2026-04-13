@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { mlsGridFetch, delay } from './client';
-import { passesExhibitA, suppressFields } from './filters';
+import { suppressFields } from './filters';
 
 function getServiceClient() {
   return createClient(
@@ -184,7 +184,9 @@ export async function syncProperty() {
       for (const r of records) {
         if (r.MlgCanView === false) {
           toSoftDelete.push(r.ListingKey as string);
-        } else if (passesExhibitA(r)) {
+        } else {
+          // Store all records; Exhibit A display filtering is enforced
+          // at the API/RLS layer, not during sync.
           const suppressed = suppressFields(r);
           listingRows.push(mapPropertyToRow(suppressed));
           const media = (r.Media as Record<string, unknown>[]) ?? [];
