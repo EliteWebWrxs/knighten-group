@@ -145,7 +145,7 @@ export async function syncProperty() {
 
   let url: string | null =
     `Property?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}` +
-    `&$expand=Media&$top=200&$orderby=ModificationTimestamp asc`;
+    `&$expand=Media&$top=200`;
 
   let pagesWalked = 0;
   let greatestTs = state?.greatest_modification_timestamp
@@ -265,7 +265,7 @@ export async function syncMember() {
     : '';
 
   let url: string | null =
-    `Member?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200&$orderby=ModificationTimestamp asc`;
+    `Member?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
@@ -325,7 +325,7 @@ export async function syncOffice() {
     : '';
 
   let url: string | null =
-    `Office?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200&$orderby=ModificationTimestamp asc`;
+    `Office?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
@@ -385,7 +385,7 @@ export async function syncOpenHouse() {
     : '';
 
   let url: string | null =
-    `OpenHouse?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200&$orderby=ModificationTimestamp asc`;
+    `OpenHouse?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
