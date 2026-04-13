@@ -18,13 +18,10 @@ export async function downloadAndStoreMedia(
   listingKey: string
 ): Promise<string | null> {
   try {
-    // MLS Grid media URLs are pre-signed; still include bearer token per API docs
-    const res = await fetch(mediaUrl, {
-      headers: {
-        Authorization: `Bearer ${process.env.MLS_GRID_TOKEN!}`,
-        'Accept-Encoding': 'gzip,deflate',
-      },
-    });
+    // MLS Grid media URLs are pre-signed with token & expiry in the URL.
+    // Do NOT send Authorization header — it conflicts with the signed URL
+    // and causes a 400 error.
+    const res = await fetch(mediaUrl);
 
     if (!res.ok) {
       console.error(`Media download failed ${mediaKey}: HTTP ${res.status}`);
