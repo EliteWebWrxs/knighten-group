@@ -5,7 +5,6 @@ export async function mlsGridFetch(pathOrUrl: string) {
     ? pathOrUrl
     : `${MLS_GRID_BASE}${pathOrUrl}`;
 
-  console.log('[MLS Grid] Fetching:', url);
   const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${process.env.MLS_GRID_TOKEN!}`,

@@ -30,6 +30,13 @@ async function ensureSyncState(resource: string) {
     await supabase.from('sync_state').insert({ resource });
     return null;
   }
+  // Normalize timestamp to Z format — Supabase may return +00:00 which
+  // contains a '+' that breaks OData $filter URLs.
+  if (data.greatest_modification_timestamp) {
+    data.greatest_modification_timestamp = new Date(
+      data.greatest_modification_timestamp
+    ).toISOString();
+  }
   return data;
 }
 
