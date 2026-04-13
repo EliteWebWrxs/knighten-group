@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal, X, MapPin, ChevronDown } from "lucide-react";
 import { ListingCard } from "@/components/search/ListingCard";
 import { ComplianceAttribution } from "@/components/listing/ComplianceAttribution";
@@ -45,13 +46,14 @@ const cities = [
   "Apollo Beach",
   "Brandon",
   "Carrollwood",
-  "FishHawk",
-  "Land O' Lakes",
+  "Land O Lakes",
   "Lithia",
-  "New Tampa",
+  "Lutz",
+  "Odessa",
+  "Plant City",
   "Riverview",
+  "Ruskin",
   "Seffner",
-  "South Tampa",
   "Tampa",
   "Valrico",
   "Wesley Chapel",
@@ -67,18 +69,21 @@ const propertyTypes = [
 ];
 
 export function SearchPageClient() {
+  const searchParams = useSearchParams();
+
   const [listings, setListings] = useState<Listing[]>([]);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 12, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const [city, setCity] = useState("All cities");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [beds, setBeds] = useState("");
-  const [baths, setBaths] = useState("");
-  const [propertyType, setPropertyType] = useState("");
-  const [sort, setSort] = useState("list_date");
+  const initialCity = searchParams.get("city") || "All cities";
+  const [city, setCity] = useState(initialCity);
+  const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
+  const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
+  const [beds, setBeds] = useState(searchParams.get("beds") || "");
+  const [baths, setBaths] = useState(searchParams.get("baths") || "");
+  const [propertyType, setPropertyType] = useState(searchParams.get("propertyType") || "");
+  const [sort, setSort] = useState(searchParams.get("sort") || "list_date");
 
   const fetchListings = useCallback(async (page = 1) => {
     setLoading(true);
@@ -126,6 +131,11 @@ export function SearchPageClient() {
   };
 
   const hasActiveFilters = city !== "All cities" || minPrice || maxPrice || beds || baths || !!propertyType;
+
+  // Auto-open filters when arriving with URL params
+  useEffect(() => {
+    if (hasActiveFilters) setFiltersOpen(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="min-h-screen bg-background">

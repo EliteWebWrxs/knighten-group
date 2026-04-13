@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Bed, Bath, Maximize, Car, Calendar, Waves, Hammer, Building,
@@ -20,9 +20,25 @@ interface Props {
 export function ListingDetailClient({ listing, agent, office, openHouses, address }: Props) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [mediaList, setMediaList] = useState(
+    (listing.listing_media || []).sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0))
+  );
 
-  const media = (listing.listing_media || [])
-    .sort((a: any, b: any) => (a.order_index ?? 0) - (b.order_index ?? 0));
+  // Trigger on-demand media download if images are missing from storage
+  useEffect(() => {
+    const hasUncached = mediaList.some((m: any) => !m.storage_path && m.media_url_original);
+    if (!hasUncached || mediaList.length === 0) return;
+
+    fetch(`/api/listings/${listing.listing_key}/media`, { method: 'POST' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.downloaded > 0) {
+          // Reload the page to pick up new storage paths from the server
+          window.location.reload();
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getImageUrl = (m: any) => {
     if (!m) return null;
@@ -75,7 +91,7 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
       {/* Photo gallery */}
       <div className="bg-muted">
         <div className="mx-auto max-w-7xl">
-          {media.length > 0 ? (
+          {mediaList.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-4 md:grid-rows-2 gap-1 md:h-[480px]">
               {/* Main image */}
               <div
@@ -83,13 +99,13 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
                 onClick={() => { setLightboxOpen(true); setLightboxIndex(0); }}
               >
                 <img
-                  src={getImageUrl(media[0]) || ""}
+                  src={getImageUrl(mediaList[0]) || ""}
                   alt={address}
                   className="h-full w-full object-cover hover:scale-105 transition-transform duration-500"
                 />
               </div>
               {/* Thumbnails */}
-              {media.slice(1, 5).map((m: any, i: number) => (
+              {mediaList.slice(1, 5).map((m: any, i: number) => (
                 <div
                   key={m.media_key}
                   className="relative cursor-pointer overflow-hidden hidden md:block"
@@ -101,9 +117,9 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
                     className="h-full w-full object-cover hover:scale-105 transition-transform duration-500"
                     loading="lazy"
                   />
-                  {i === 3 && media.length > 5 && (
+                  {i === 3 && mediaList.length > 5 && (
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center text-white font-medium">
-                      +{media.length - 5} photos
+                      +{mediaList.length - 5} photos
                     </div>
                   )}
                 </div>
@@ -124,24 +140,24 @@ export function ListingDetailClient({ listing, agent, office, openHouses, addres
             <X className="h-6 w-6" />
           </button>
           <button
-            onClick={() => setLightboxIndex((lightboxIndex - 1 + media.length) % media.length)}
+            onClick={() => setLightboxIndex((lightboxIndex - 1 + mediaList.length) % mediaList.length)}
             className="absolute left-4 text-white p-2 hover:bg-white/10 rounded-full"
           >
             <ChevronLeft className="h-8 w-8" />
           </button>
           <img
-            src={getImageUrl(media[lightboxIndex]) || ""}
+            src={getImageUrl(mediaList[lightboxIndex]) || ""}
             alt={`${address} photo ${lightboxIndex + 1}`}
             className="max-h-[85vh] max-w-[90vw] object-contain"
           />
           <button
-            onClick={() => setLightboxIndex((lightboxIndex + 1) % media.length)}
+            onClick={() => setLightboxIndex((lightboxIndex + 1) % mediaList.length)}
             className="absolute right-4 text-white p-2 hover:bg-white/10 rounded-full"
           >
             <ChevronRight className="h-8 w-8" />
           </button>
           <p className="absolute bottom-4 text-white text-sm">
-            {lightboxIndex + 1} / {media.length}
+            {lightboxIndex + 1} / {mediaList.length}
           </p>
         </div>
       )}

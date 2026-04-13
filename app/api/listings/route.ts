@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
     query = query.neq('property_type', 'Residential Lease');
   }
 
-  if (city) query = query.eq('city', city);
+  if (city) query = query.ilike('city', city);
   if (minPrice) query = query.gte('list_price', parseFloat(minPrice));
   if (maxPrice) query = query.lte('list_price', parseFloat(maxPrice));
   if (beds) query = query.gte('bedrooms_total', parseInt(beds));
