@@ -11,11 +11,12 @@ function getServiceClient() {
 const ORIGINATING_SYSTEM =
   process.env.MLS_GRID_ORIGINATING_SYSTEM_NAME || 'mfrmls';
 
-// Stay under the 4 GB/hr bandwidth limit (~200KB avg image size)
-const MAX_IMAGES_PER_RUN = 200;
+// Cap images per cron run to avoid hitting media CDN rate limits
+const MAX_IMAGES_PER_RUN = 50;
 
-// Delay between image downloads — MLS Grid media CDN rate-limits aggressively
-const IMAGE_DOWNLOAD_DELAY_MS = 500;
+// Delay between image downloads — MLS Grid media CDN rate-limits aggressively.
+// 1 image per second keeps us well under their threshold.
+const IMAGE_DOWNLOAD_DELAY_MS = 1000;
 
 /**
  * Downloads a photo from a fresh MLS Grid MediaURL and uploads to Supabase Storage.

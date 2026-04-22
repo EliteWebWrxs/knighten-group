@@ -151,8 +151,8 @@ export async function GET(req: Request) {
 
     if (!syncResult.hasMore && remainingMs > 30_000 && getRequestCount() < 30) {
       try {
-        // If no new data was synced, do an aggressive backfill
-        const batchSize = syncResult.fetched === 0 ? 200 : 40;
+        // If no new data was synced, do a larger backfill
+        const batchSize = syncResult.fetched === 0 ? 50 : 20;
         const mediaResult = await backfillMedia(batchSize);
         results.media = mediaResult;
       } catch (e) {
