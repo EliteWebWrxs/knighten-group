@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { mlsGridFetch, delay } from './client';
+import { mlsGridFetch, delay, getRequestCount } from './client';
 import { suppressFields } from './filters';
 import { downloadMediaBatch } from './media';
 
@@ -8,16 +8,6 @@ function getServiceClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
-}
-
-async function getSyncState(resource: string) {
-  const supabase = getServiceClient();
-  const { data } = await supabase
-    .from('sync_state')
-    .select('*')
-    .eq('resource', resource)
-    .single();
-  return data;
 }
 
 async function ensureSyncState(resource: string) {
@@ -41,7 +31,11 @@ async function ensureSyncState(resource: string) {
   return data;
 }
 
-async function updateSyncState(resource: string, greatestTs: Date) {
+async function updateSyncState(
+  resource: string,
+  greatestTs: Date,
+  hasMore: boolean
+) {
   const supabase = getServiceClient();
   await supabase
     .from('sync_state')
@@ -50,6 +44,7 @@ async function updateSyncState(resource: string, greatestTs: Date) {
       last_run_finished_at: new Date().toISOString(),
       last_run_status: 'success',
       last_error: null,
+      has_more: hasMore,
     })
     .eq('resource', resource);
 }
@@ -61,6 +56,7 @@ async function writeSyncLog(entry: {
   pagesWalked: number;
   startedAt: Date;
   error?: string;
+  requestsUsed?: number;
 }) {
   const supabase = getServiceClient();
   await supabase.from('sync_log').insert({
@@ -72,15 +68,8 @@ async function writeSyncLog(entry: {
     status: entry.error ? 'error' : 'success',
     error_message: entry.error || null,
     next_link_pages_walked: entry.pagesWalked,
+    requests_used: entry.requestsUsed ?? null,
   });
-}
-
-async function softDeleteListing(listingKey: string) {
-  const supabase = getServiceClient();
-  await supabase
-    .from('listings')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('listing_key', listingKey);
 }
 
 function mapPropertyToRow(r: Record<string, unknown>) {
@@ -140,25 +129,43 @@ function mapPropertyToRow(r: Record<string, unknown>) {
 const ORIGINATING_SYSTEM =
   process.env.MLS_GRID_ORIGINATING_SYSTEM_NAME || 'mfrmls';
 
-// Max pages per invocation to stay under Vercel timeout.
-// Each page = up to 200 records, ~600ms delay. 10 pages ~ 6s network + processing.
-const MAX_PAGES_PER_RUN = 10;
+// Initial import date floor — only fetch listings modified since this date
+// on the very first sync (no prior watermark). Ongoing syncs use the stored watermark.
+const INITIAL_IMPORT_FLOOR = '2026-01-01T00:00:00.000Z';
+
+// With $expand=Media, MLS Grid caps $top at 1,000.
+// Without $expand (Member, Office, OpenHouse), max is 5,000.
+const PROPERTY_PAGE_SIZE = 1000;
+const OTHER_PAGE_SIZE = 5000;
+
+// Max pages per invocation. With 1,000 records/page for Property,
+// 5 pages = 5,000 records per run.
+const MAX_PAGES_PER_RUN = 5;
+
+// Safety margin: stop 30 seconds before Vercel 300s timeout.
+const MAX_ELAPSED_MS = 270_000;
+
+// Max MLS Grid API requests per invocation.
+const MAX_REQUESTS_PER_RUN = 40;
 
 export async function syncProperty() {
   const state = await ensureSyncState('Property');
   const startedAt = new Date();
-  const tsFilter = state?.greatest_modification_timestamp
-    ? ` and ModificationTimestamp gt ${state.greatest_modification_timestamp}`
-    : '';
+  const runStart = Date.now();
+  const isInitialImport = !state?.greatest_modification_timestamp;
+
+  // Use stored watermark or fall back to the initial import floor date
+  const tsValue = state?.greatest_modification_timestamp || INITIAL_IMPORT_FLOOR;
+  const tsFilter = ` and ModificationTimestamp ge ${tsValue}`;
 
   let url: string | null =
     `Property?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}` +
-    `&$expand=Media&$top=200`;
+    `&$expand=Media&$top=${PROPERTY_PAGE_SIZE}`;
 
   let pagesWalked = 0;
   let greatestTs = state?.greatest_modification_timestamp
     ? new Date(state.greatest_modification_timestamp)
-    : new Date(0);
+    : new Date(INITIAL_IMPORT_FLOOR);
   let kept = 0;
   let fetched = 0;
   let mediaDownloaded = 0;
@@ -174,6 +181,16 @@ export async function syncProperty() {
       .eq('resource', 'Property');
 
     while (url && pagesWalked < MAX_PAGES_PER_RUN) {
+      // Budget guards
+      if (Date.now() - runStart > MAX_ELAPSED_MS) {
+        console.warn('[Sync] Approaching Vercel timeout, stopping early');
+        break;
+      }
+      if (getRequestCount() >= MAX_REQUESTS_PER_RUN) {
+        console.warn('[Sync] Request budget exhausted, stopping early');
+        break;
+      }
+
       const page = await mlsGridFetch(url);
       const records: Record<string, unknown>[] = page.value ?? [];
       fetched += records.length;
@@ -182,14 +199,17 @@ export async function syncProperty() {
       const listingRows: ReturnType<typeof mapPropertyToRow>[] = [];
       const allMediaRows: Record<string, unknown>[][] = [];
       const toSoftDelete: string[] = [];
-      const freshMediaForDownload: { mediaKey: string; mediaUrl: string; listingKey: string; isPrimary: boolean }[] = [];
+      const freshMediaForDownload: {
+        mediaKey: string;
+        mediaUrl: string;
+        listingKey: string;
+        isPrimary: boolean;
+      }[] = [];
 
       for (const r of records) {
         if (r.MlgCanView === false) {
           toSoftDelete.push(r.ListingKey as string);
         } else {
-          // Store all records; Exhibit A display filtering is enforced
-          // at the API/RLS layer, not during sync.
           const suppressed = suppressFields(r);
           listingRows.push(mapPropertyToRow(suppressed));
           const media = (r.Media as Record<string, unknown>[]) ?? [];
@@ -205,17 +225,19 @@ export async function syncProperty() {
                 modification_timestamp: m.ModificationTimestamp as string,
               }))
             );
-            // Collect fresh URLs for immediate download (primary images only)
-            media.forEach((m, i) => {
-              if (m.MediaURL) {
-                freshMediaForDownload.push({
-                  mediaKey: m.MediaKey as string,
-                  mediaUrl: m.MediaURL as string,
-                  listingKey: r.ListingKey as string,
-                  isPrimary: i === 0,
-                });
-              }
-            });
+            // Collect fresh URLs for download (only during incremental sync, not initial import)
+            if (!isInitialImport) {
+              media.forEach((m, i) => {
+                if (m.MediaURL) {
+                  freshMediaForDownload.push({
+                    mediaKey: m.MediaKey as string,
+                    mediaUrl: m.MediaURL as string,
+                    listingKey: r.ListingKey as string,
+                    isPrimary: i === 0,
+                  });
+                }
+              });
+            }
           }
           kept++;
         }
@@ -226,13 +248,17 @@ export async function syncProperty() {
 
       // Batch upsert listings
       if (listingRows.length > 0) {
-        await supabase.from('listings').upsert(listingRows, { onConflict: 'listing_key' });
+        await supabase
+          .from('listings')
+          .upsert(listingRows, { onConflict: 'listing_key' });
       }
 
       // Batch upsert media
       const flatMedia = allMediaRows.flat();
       if (flatMedia.length > 0) {
-        await supabase.from('listing_media').upsert(flatMedia, { onConflict: 'media_key' });
+        await supabase
+          .from('listing_media')
+          .upsert(flatMedia, { onConflict: 'media_key' });
       }
 
       // Batch soft deletes
@@ -243,8 +269,9 @@ export async function syncProperty() {
           .in('listing_key', toSoftDelete);
       }
 
-      // Download primary images while URLs are still fresh (they expire quickly)
-      if (freshMediaForDownload.length > 0) {
+      // Download primary images while URLs are still fresh (they expire quickly).
+      // Skip during initial import — backfill handles it after all data is loaded.
+      if (!isInitialImport && freshMediaForDownload.length > 0) {
         try {
           const downloaded = await downloadMediaBatch(freshMediaForDownload);
           mediaDownloaded += downloaded;
@@ -256,21 +283,26 @@ export async function syncProperty() {
       pagesWalked++;
       url = page['@odata.nextLink'] ?? null;
 
-      // Stay well under 2 RPS
-      if (url) await delay(600);
+      // Save progress after each page so we don't re-process on failure
+      await updateSyncState('Property', greatestTs, /* hasMore */ !!url);
+
+      // Small breathing room between pages for DB writes to settle.
+      // Actual rate limiting is handled by throttle() inside mlsGridFetch.
+      if (url) await delay(100);
     }
 
-    await updateSyncState('Property', greatestTs);
+    const hasMore = !!url;
+    await updateSyncState('Property', greatestTs, hasMore);
     await writeSyncLog({
       resource: 'Property',
       fetched,
       kept,
       pagesWalked,
       startedAt,
+      requestsUsed: getRequestCount(),
     });
 
-    // Return whether there are more pages to process
-    return { fetched, kept, pagesWalked, hasMore: !!url, mediaDownloaded };
+    return { fetched, kept, pagesWalked, hasMore, mediaDownloaded };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     const supabase = getServiceClient();
@@ -285,6 +317,7 @@ export async function syncProperty() {
       pagesWalked,
       startedAt,
       error: msg,
+      requestsUsed: getRequestCount(),
     });
     throw error;
   }
@@ -293,12 +326,13 @@ export async function syncProperty() {
 export async function syncMember() {
   const state = await ensureSyncState('Member');
   const startedAt = new Date();
+  const runStart = Date.now();
   const tsFilter = state?.greatest_modification_timestamp
-    ? ` and ModificationTimestamp gt ${state.greatest_modification_timestamp}`
+    ? ` and ModificationTimestamp ge ${state.greatest_modification_timestamp}`
     : '';
 
   let url: string | null =
-    `Member?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
+    `Member?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=${OTHER_PAGE_SIZE}`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
@@ -309,6 +343,9 @@ export async function syncMember() {
 
   try {
     while (url && pagesWalked < MAX_PAGES_PER_RUN) {
+      if (Date.now() - runStart > MAX_ELAPSED_MS) break;
+      if (getRequestCount() >= MAX_REQUESTS_PER_RUN) break;
+
       const page = await mlsGridFetch(url);
       const records: Record<string, unknown>[] = page.value ?? [];
       fetched += records.length;
@@ -332,20 +369,45 @@ export async function syncMember() {
       });
 
       if (rows.length > 0) {
-        await supabase.from('members').upsert(rows, { onConflict: 'member_key' });
+        await supabase
+          .from('members')
+          .upsert(rows, { onConflict: 'member_key' });
       }
 
       pagesWalked++;
       url = page['@odata.nextLink'] ?? null;
-      if (url) await delay(600);
+
+      await updateSyncState(
+        'Member',
+        greatestTs,
+        /* hasMore */ !!url
+      );
+
+      if (url) await delay(100);
     }
 
-    await updateSyncState('Member', greatestTs);
-    await writeSyncLog({ resource: 'Member', fetched, kept: fetched, pagesWalked, startedAt });
-    return { fetched, pagesWalked, hasMore: !!url };
+    const hasMore = !!url;
+    await updateSyncState('Member', greatestTs, hasMore);
+    await writeSyncLog({
+      resource: 'Member',
+      fetched,
+      kept: fetched,
+      pagesWalked,
+      startedAt,
+      requestsUsed: getRequestCount(),
+    });
+    return { fetched, pagesWalked, hasMore };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    await writeSyncLog({ resource: 'Member', fetched, kept: 0, pagesWalked, startedAt, error: msg });
+    await writeSyncLog({
+      resource: 'Member',
+      fetched,
+      kept: 0,
+      pagesWalked,
+      startedAt,
+      error: msg,
+      requestsUsed: getRequestCount(),
+    });
     throw error;
   }
 }
@@ -353,12 +415,13 @@ export async function syncMember() {
 export async function syncOffice() {
   const state = await ensureSyncState('Office');
   const startedAt = new Date();
+  const runStart = Date.now();
   const tsFilter = state?.greatest_modification_timestamp
-    ? ` and ModificationTimestamp gt ${state.greatest_modification_timestamp}`
+    ? ` and ModificationTimestamp ge ${state.greatest_modification_timestamp}`
     : '';
 
   let url: string | null =
-    `Office?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
+    `Office?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=${OTHER_PAGE_SIZE}`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
@@ -369,6 +432,9 @@ export async function syncOffice() {
 
   try {
     while (url && pagesWalked < MAX_PAGES_PER_RUN) {
+      if (Date.now() - runStart > MAX_ELAPSED_MS) break;
+      if (getRequestCount() >= MAX_REQUESTS_PER_RUN) break;
+
       const page = await mlsGridFetch(url);
       const records: Record<string, unknown>[] = page.value ?? [];
       fetched += records.length;
@@ -392,20 +458,45 @@ export async function syncOffice() {
       });
 
       if (rows.length > 0) {
-        await supabase.from('offices').upsert(rows, { onConflict: 'office_key' });
+        await supabase
+          .from('offices')
+          .upsert(rows, { onConflict: 'office_key' });
       }
 
       pagesWalked++;
       url = page['@odata.nextLink'] ?? null;
-      if (url) await delay(600);
+
+      await updateSyncState(
+        'Office',
+        greatestTs,
+        /* hasMore */ !!url
+      );
+
+      if (url) await delay(100);
     }
 
-    await updateSyncState('Office', greatestTs);
-    await writeSyncLog({ resource: 'Office', fetched, kept: fetched, pagesWalked, startedAt });
-    return { fetched, pagesWalked, hasMore: !!url };
+    const hasMore = !!url;
+    await updateSyncState('Office', greatestTs, hasMore);
+    await writeSyncLog({
+      resource: 'Office',
+      fetched,
+      kept: fetched,
+      pagesWalked,
+      startedAt,
+      requestsUsed: getRequestCount(),
+    });
+    return { fetched, pagesWalked, hasMore };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    await writeSyncLog({ resource: 'Office', fetched, kept: 0, pagesWalked, startedAt, error: msg });
+    await writeSyncLog({
+      resource: 'Office',
+      fetched,
+      kept: 0,
+      pagesWalked,
+      startedAt,
+      error: msg,
+      requestsUsed: getRequestCount(),
+    });
     throw error;
   }
 }
@@ -413,12 +504,13 @@ export async function syncOffice() {
 export async function syncOpenHouse() {
   const state = await ensureSyncState('OpenHouse');
   const startedAt = new Date();
+  const runStart = Date.now();
   const tsFilter = state?.greatest_modification_timestamp
-    ? ` and ModificationTimestamp gt ${state.greatest_modification_timestamp}`
+    ? ` and ModificationTimestamp ge ${state.greatest_modification_timestamp}`
     : '';
 
   let url: string | null =
-    `OpenHouse?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=200`;
+    `OpenHouse?$filter=OriginatingSystemName eq '${ORIGINATING_SYSTEM}' and MlgCanView eq true${tsFilter}&$top=${OTHER_PAGE_SIZE}`;
 
   const supabase = getServiceClient();
   let pagesWalked = 0;
@@ -429,6 +521,9 @@ export async function syncOpenHouse() {
 
   try {
     while (url && pagesWalked < MAX_PAGES_PER_RUN) {
+      if (Date.now() - runStart > MAX_ELAPSED_MS) break;
+      if (getRequestCount() >= MAX_REQUESTS_PER_RUN) break;
+
       const page = await mlsGridFetch(url);
       const records: Record<string, unknown>[] = page.value ?? [];
       fetched += records.length;
@@ -450,20 +545,45 @@ export async function syncOpenHouse() {
       });
 
       if (rows.length > 0) {
-        await supabase.from('open_houses').upsert(rows, { onConflict: 'open_house_key' });
+        await supabase
+          .from('open_houses')
+          .upsert(rows, { onConflict: 'open_house_key' });
       }
 
       pagesWalked++;
       url = page['@odata.nextLink'] ?? null;
-      if (url) await delay(600);
+
+      await updateSyncState(
+        'OpenHouse',
+        greatestTs,
+        /* hasMore */ !!url
+      );
+
+      if (url) await delay(100);
     }
 
-    await updateSyncState('OpenHouse', greatestTs);
-    await writeSyncLog({ resource: 'OpenHouse', fetched, kept: fetched, pagesWalked, startedAt });
-    return { fetched, pagesWalked, hasMore: !!url };
+    const hasMore = !!url;
+    await updateSyncState('OpenHouse', greatestTs, hasMore);
+    await writeSyncLog({
+      resource: 'OpenHouse',
+      fetched,
+      kept: fetched,
+      pagesWalked,
+      startedAt,
+      requestsUsed: getRequestCount(),
+    });
+    return { fetched, pagesWalked, hasMore };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    await writeSyncLog({ resource: 'OpenHouse', fetched, kept: 0, pagesWalked, startedAt, error: msg });
+    await writeSyncLog({
+      resource: 'OpenHouse',
+      fetched,
+      kept: 0,
+      pagesWalked,
+      startedAt,
+      error: msg,
+      requestsUsed: getRequestCount(),
+    });
     throw error;
   }
 }
