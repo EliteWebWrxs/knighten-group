@@ -86,9 +86,12 @@ export async function GET(req: Request) {
   const startTime = Date.now();
   resetRequestCount();
 
-  // Verify cron secret
-  const auth = req.headers.get('authorization');
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  // Verify cron secret — Vercel Cron sends it via x-vercel-cron-auth-token,
+  // manual triggers can use Authorization: Bearer <token>
+  const vercelToken = req.headers.get('x-vercel-cron-auth-token');
+  const bearerToken = req.headers.get('authorization')?.replace('Bearer ', '');
+  const token = vercelToken || bearerToken;
+  if (token !== process.env.CRON_SECRET) {
     return new Response('Unauthorized', { status: 401 });
   }
 
