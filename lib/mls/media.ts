@@ -12,7 +12,10 @@ const ORIGINATING_SYSTEM =
   process.env.MLS_GRID_ORIGINATING_SYSTEM_NAME || 'mfrmls';
 
 // Stay under the 4 GB/hr bandwidth limit (~200KB avg image size)
-const MAX_IMAGES_PER_RUN = 300;
+const MAX_IMAGES_PER_RUN = 200;
+
+// Delay between image downloads — MLS Grid media CDN rate-limits aggressively
+const IMAGE_DOWNLOAD_DELAY_MS = 500;
 
 /**
  * Downloads a photo from a fresh MLS Grid MediaURL and uploads to Supabase Storage.
@@ -25,12 +28,34 @@ export async function downloadAndStoreMedia(
   listingKey: string
 ): Promise<string | null> {
   try {
-    const res = await fetch(mediaUrl);
+    let res: Response | null = null;
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
+    // Retry up to 3 times with backoff for 429/5xx on image downloads
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch(mediaUrl);
+
+      if (res.ok) break;
+
+      if (res.status === 429 || res.status >= 500) {
+        const retryAfter = res.headers.get('Retry-After');
+        const waitMs = retryAfter
+          ? parseInt(retryAfter, 10) * 1000 || 2000
+          : 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
+        console.warn(
+          `[Media] ${res.status} downloading ${mediaKey}, retrying in ${waitMs}ms (attempt ${attempt + 1}/3)`
+        );
+        await delay(waitMs);
+        continue;
+      }
+
+      // Non-retryable error
+      break;
+    }
+
+    if (!res || !res.ok) {
+      const body = res ? await res.text().catch(() => '') : 'no response';
       console.error(
-        `Media download failed ${mediaKey}: HTTP ${res.status} - ${body.slice(0, 200)}`
+        `Media download failed ${mediaKey}: HTTP ${res?.status} - ${body.slice(0, 200)}`
       );
       return null;
     }
@@ -89,8 +114,7 @@ export async function downloadMediaBatch(
   for (const m of primaries.slice(0, limit)) {
     const path = await downloadAndStoreMedia(m.mediaKey, m.mediaUrl, m.listingKey);
     if (path) downloaded++;
-    // Small delay between downloads
-    await delay(50);
+    await delay(IMAGE_DOWNLOAD_DELAY_MS);
   }
 
   return downloaded;
@@ -182,7 +206,7 @@ async function batchFetchAndDownload(listingKeys: string[]): Promise<{
           totalDownloaded++;
         }
 
-        await delay(50);
+        await delay(IMAGE_DOWNLOAD_DELAY_MS);
       }
     } catch (err) {
       console.error(
