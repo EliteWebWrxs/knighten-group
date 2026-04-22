@@ -3,11 +3,5 @@
     "app/api/cron/sync-mls/route.ts": {
       "maxDuration": 300
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/sync-mls",
-      "schedule": "* * * * *"
-    }
-  ]
+  }
 }
